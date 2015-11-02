@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.ResourceBundle;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javafx.application.Platform;
 import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -30,14 +31,17 @@ import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.TextField;
+import javafx.scene.image.Image;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.RowConstraints;
 import javafx.stage.FileChooser;
+import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import net.softwarepage.facharbeit.normalgame.helpers.FileManager;
+import net.softwarepage.facharbeit.normalgame.logic.MixedNashEquilibrium;
 import net.softwarepage.facharbeit.normalgame.logic.NashEquilibrium;
 import net.softwarepage.facharbeit.normalgame.logic.PureNashEquilibrium;
 import net.softwarepage.facharbeit.normalgame.logic.NormalGame;
@@ -93,6 +97,8 @@ public class NormalGameController implements Initializable {
     private boolean propertiesOpened;
     private boolean showingOptimalStrategies;
 
+    private Stage loadingStage;
+
     private final NormalGame game;
 
     public NormalGameController() {
@@ -138,14 +144,14 @@ public class NormalGameController implements Initializable {
     private void setupContextMenus() {
         for (Strategy strat : game.getPlayer1().getStrategies()) {
             TextField tf = (TextField) getStrategyField(strat, game.getPlayer1());
-            if(tf == null) {
+            if (tf == null) {
                 return;
             }
             tf.setContextMenu(createStrategyContextMenu(strat));
         }
         for (Strategy strat : game.getPlayer2().getStrategies()) {
             TextField tf = (TextField) getStrategyField(strat, game.getPlayer2());
-            if(tf == null) {
+            if (tf == null) {
                 return;
             }
             tf.setContextMenu(createStrategyContextMenu(strat));
@@ -181,31 +187,35 @@ public class NormalGameController implements Initializable {
                 try {
                     Node field = getField(nne.getFirstStrat(), nne.getSecondStrat());
                     oldSelection = field;
-                    colorGreen(field);
+                    paintGreen(field);
                 } catch (NullPointerException npe) {
                 }
             } else {
                 if (!showingOptimalStrategies) {
                     return;
+                } else {
+                    removeGUIStrategy(GUIStrategyType.Row);
+                    removeGUIStrategy(GUIStrategyType.Column);
+                    setupOptimalStrategies((MixedNashEquilibrium) equilibrium);
                 }
                 Node field = getNodeByRowColumnIndex(getRowCount() - 2, getColumnCount() - 2);
                 oldSelection = field;
-                colorGreen(field);
+                paintGreen(field);
             }
         });
     }
 
     private void refreshGUI() {
-        testPlayerName(game.getPlayer1());
-        testPlayerName(game.getPlayer2());
+        resetPlayerName(game.getPlayer1());
+        resetPlayerName(game.getPlayer2());
 
-        testStrategies(game.getPlayer1());
-        testStrategies(game.getPlayer2());
+        addStrategies(game.getPlayer1());
+        addStrategies(game.getPlayer2());
 
-        testVectors();
+        resetVectors();
     }
 
-    private void testPlayerName(Player player) {
+    private void resetPlayerName(Player player) {
         TextField field;
         if (player.equals(game.getPlayer1())) {
             field = (TextField) getNodeByRowColumnIndex(2, 0);
@@ -215,13 +225,13 @@ public class NormalGameController implements Initializable {
         field.setText(player.getName());
     }
 
-    private void testStrategies(Player player) {
+    private void addStrategies(Player player) {
         for (Strategy strat : player.getStrategies()) {
             if (getStrategyField(strat, player) == null) {
                 if (player.equals(game.getPlayer1())) {
-                    addStrategy(GUIStrategyType.Row, strat.getName(), false);
+                    addNormalStrategy(GUIStrategyType.Row, strat.getName());
                 } else {
-                    addStrategy(GUIStrategyType.Column, strat.getName(), false);
+                    addNormalStrategy(GUIStrategyType.Column, strat.getName());
                 }
             } else {
                 TextField field = (TextField) getStrategyField(strat, player);
@@ -230,7 +240,7 @@ public class NormalGameController implements Initializable {
         }
     }
 
-    private void testVectors() {
+    private void resetVectors() {
         for (StrategyPair pair : game.getVectors().keySet()) {
             VectorField field = (VectorField) getField(pair.getStrategy1(), pair.getStrategy2());
             float[] values = field.getValues();
@@ -261,17 +271,22 @@ public class NormalGameController implements Initializable {
         }
     }
 
-    @FXML
-    private void handleEditClick(ActionEvent event) {
-        menubar.requestFocus();
+    private void hidePossibleOptimalStrategies() {
         if (showingOptimalStrategies) {
             showingOptimalStrategies = false;
             removeGUIStrategy(GUIStrategyType.Row);
             removeGUIStrategy(GUIStrategyType.Column);
-        } else if (event.getSource().equals(addRow)) {
-            addStrategy(GUIStrategyType.Row, null, false);
+        }
+    }
+
+    @FXML
+    private void handleEditClick(ActionEvent event) {
+        menubar.requestFocus();
+        hidePossibleOptimalStrategies();
+        if (event.getSource().equals(addRow)) {
+            addNormalStrategy(GUIStrategyType.Row, null);
         } else if (event.getSource().equals(addColumn)) {
-            addStrategy(GUIStrategyType.Column, null, false);
+            addNormalStrategy(GUIStrategyType.Column, null);
         } else if (event.getSource().equals(editMatrix)) {
             openEditScene();
         } else if (event.getSource().equals(removeRow)) {
@@ -288,30 +303,39 @@ public class NormalGameController implements Initializable {
     @FXML
     private void handleActionClick(ActionEvent event) {
         menubar.requestFocus();
-        if (showingOptimalStrategies) {
-            showingOptimalStrategies = false;
-            removeGUIStrategy(GUIStrategyType.Row);
-            removeGUIStrategy(GUIStrategyType.Column);
-        }
+        hidePossibleOptimalStrategies();
         if (event.getSource().equals(findDominatedStrategies)) {
             unColorAllStrategyFields(game.getPlayer1());
             unColorAllStrategyFields(game.getPlayer2());
-            changeAppearance(game.findDominatedStrategies(game.getPlayer1()), game.getPlayer1());
-            changeAppearance(game.findDominatedStrategies(game.getPlayer2()), game.getPlayer2());
+            List<Strategy> firstDominatedStrategies = game.findDominatedStrategies(game.getPlayer1());
+            List<Strategy> secondDominatedStrategies = game.findDominatedStrategies(game.getPlayer2());
+            if (!firstDominatedStrategies.isEmpty())
+                changeAppearance(firstDominatedStrategies, game.getPlayer1());
+            if (!secondDominatedStrategies.isEmpty())
+                changeAppearance(secondDominatedStrategies, game.getPlayer2());
         } else if (event.getSource().equals(findCleanNash)) {
             List<NashEquilibrium> nes = new ArrayList<>();
             nes.addAll(game.findPureNashEquilibria());
             setListViewContent(nes);
         } else if (event.getSource().equals(findMixedNash)) {
-            List<NashEquilibrium> nes = new ArrayList<>();
-            NashEquilibrium ne = game.findMixedNashEquilibria();
-            if (ne == null) {
-                list.getItems().clear();
-                return;
-            }
-            nes.add(ne);
-            setListViewContent(nes);
-            setupOptimalStrategies();
+            showLoadingStage();
+            Thread t = new Thread(() -> {
+                System.out.println(game.findMixedNashEquilibria());
+                List<MixedNashEquilibrium> nes = game.findMixedNashEquilibria();
+                if (nes == null) {
+                    Platform.runLater(() -> {
+                        loadingStage.close();
+                    });
+                    return;
+                }
+
+                Platform.runLater(() -> {
+                    setListViewContent(nes);
+                    setupOptimalStrategies(nes.get(0));
+                    loadingStage.close();
+                });
+            });
+            t.start();
         }
     }
 
@@ -327,6 +351,24 @@ public class NormalGameController implements Initializable {
         }
     }
 
+    private void showLoadingStage() {
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("Calculating.fxml"));
+            Scene scene = new Scene(loader.load());
+            loadingStage = new Stage();
+            loadingStage.setResizable(false);
+            loadingStage.initOwner(menubar.getScene().getWindow());
+            loadingStage.getIcons().add(new Image(Seminararbeit.class.getResourceAsStream("icon.png")));
+            loadingStage.setScene(scene);
+            loadingStage.setOnCloseRequest(e -> e.consume());
+            loadingStage.setAlwaysOnTop(true);
+            loadingStage.initModality(Modality.APPLICATION_MODAL);
+            loadingStage.show();
+        } catch (IOException ex) {
+            Logger.getLogger(NormalGameController.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+
     private void unColorAllStrategyFields(Player player) {
         for (Strategy strategy : player.getStrategies()) {
             unColor(getStrategyField(strategy, player));
@@ -334,14 +376,14 @@ public class NormalGameController implements Initializable {
     }
 
     private void changeAppearance(List<Strategy> strategies, Player player) {
-        strategies.forEach((strat) -> colorRed(getStrategyField(strat, player)));
+        strategies.forEach((strat) -> paintRed(getStrategyField(strat, player)));
     }
 
-    private void colorRed(Node n) {
+    private void paintRed(Node n) {
         n.setStyle("-fx-background-color: firebrick; -fx-text-fill: white;");
     }
 
-    private void colorGreen(Node node) {
+    private void paintGreen(Node node) {
         node.setStyle("-fx-background-color: limegreen;");
     }
 
@@ -349,9 +391,9 @@ public class NormalGameController implements Initializable {
         node.setStyle(null);
     }
 
-    private void setupOptimalStrategies() {
-        addStrategy(GUIStrategyType.Row, "Optimal gemischt", true);
-        addStrategy(GUIStrategyType.Column, "Optimal gemischt", true);
+    private void setupOptimalStrategies(MixedNashEquilibrium mne) {
+        addOptimalStrategy(GUIStrategyType.Row, "Optimal gemischt", mne);
+        addOptimalStrategy(GUIStrategyType.Column, "Optimal gemischt", mne);
         showingOptimalStrategies = true;
     }
 
@@ -363,7 +405,7 @@ public class NormalGameController implements Initializable {
             }
         } else if (count > player.getStrategies().size()) {
             while (count != player.getStrategies().size()) {
-                addStrategy(type, null, false);
+                addNormalStrategy(type, null);
             }
         }
     }
@@ -372,26 +414,41 @@ public class NormalGameController implements Initializable {
         int totalCount = type == GUIStrategyType.Row ? getRowCount() : getColumnCount();
         int lastStrategyIndex = totalCount - 1;
         int strategyCount = totalCount - 2;
+        Player player = type == GUIStrategyType.Row ? game.getPlayer1() : game.getPlayer2();
         String stratName;
         if (name == null) {
             stratName = "Strategie" + strategyCount;
+            while (game.getStrategy(stratName, player) != null) {
+                strategyCount++;
+                stratName = "Strategie" + strategyCount;
+            }
         } else {
             stratName = name;
         }
-        Player player = type == GUIStrategyType.Row ? game.getPlayer1() : game.getPlayer2();
         if (game.getStrategy(stratName, player) == null && !optimalStrategy) {
             game.addStrategy(stratName, player);
         }
         TextField tf = createStrategyTextField(stratName, optimalStrategy);
         if (type == GUIStrategyType.Row) {
             addStrategyFieldRow(tf, lastStrategyIndex, strategyCount);
-            //tf.setContextMenu(createStrategyContextMenu(game.getStrategy(name, game.getPlayer1())));
         } else {
             addStrategyFieldColumn(tf, lastStrategyIndex, strategyCount);
-            //tf.setContextMenu(createStrategyContextMenu(game.getStrategy(name, game.getPlayer2())));
         }
         setupContextMenus();
-        addNewStrategyVectors(type, optimalStrategy, lastStrategyIndex);
+    }
+
+    private void addNormalStrategy(GUIStrategyType type, String name) {
+        int totalCount = type == GUIStrategyType.Row ? getRowCount() : getColumnCount();
+        int lastStrategyIndex = totalCount - 1;
+        addStrategy(type, name, false);
+        addNewNormalStrategyVectors(type, lastStrategyIndex);
+    }
+
+    private void addOptimalStrategy(GUIStrategyType type, String name, MixedNashEquilibrium mne) {
+        int totalCount = type == GUIStrategyType.Row ? getRowCount() : getColumnCount();
+        int lastStrategyIndex = totalCount - 1;
+        addStrategy(type, name, true);
+        addNewOptimalStrategyVectors(type, lastStrategyIndex, mne);
     }
 
     private void addStrategyFieldRow(TextField tf, int lastStrategyIndex, int strategyCount) {
@@ -403,7 +460,6 @@ public class NormalGameController implements Initializable {
         grid.getRowConstraints().add(rc);
         Node firstPlayer = getNodeByRowColumnIndex(2, 0);
         GridPane.setRowSpan(firstPlayer, strategyCount);
-        System.out.println("new rs: " + strategyCount);
         grid.add(tf, 1, lastStrategyIndex);
         GridPane.setRowIndex(list, GridPane.getRowIndex(list) + 1);
 
@@ -427,26 +483,35 @@ public class NormalGameController implements Initializable {
         scrollPane.setPrefWidth(scrollPane.getPrefWidth() + 40);
     }
 
-    private void addNewStrategyVectors(GUIStrategyType type, boolean optimalStrategy, int strategyIndex) {
+    private void addNewNormalStrategyVectors(GUIStrategyType type, int strategyIndex) {
+        int otherStrategyCount = type == GUIStrategyType.Row ? getColumnCount() - 1 : getRowCount() - 1;
+        for (int i = 2; i < otherStrategyCount; i++) {
+            VectorField vf = createVectorField(false);
+            if (type == GUIStrategyType.Row)
+                grid.add(vf, i, strategyIndex);
+            else
+                grid.add(vf, strategyIndex, i);
+        }
+    }
+
+    private void addNewOptimalStrategyVectors(GUIStrategyType type, int strategyIndex, MixedNashEquilibrium mne) {
         Player player = type == GUIStrategyType.Row ? game.getPlayer1() : game.getPlayer2();
         int otherStrategyCount = type == GUIStrategyType.Row ? getColumnCount() - 1 : getRowCount() - 1;
         for (int i = 2; i < otherStrategyCount; i++) {
-            VectorField vf = createVectorField(optimalStrategy);
-            if (optimalStrategy) {
-                int stratIndex = i - 2;
-                Player otherPlayer = player == game.getPlayer1() ? game.getPlayer2() : game.getPlayer1();
-                try {
-                    String strategy = otherPlayer.getStrategies().get(stratIndex).getName();
-                    vf.setText(game.getMixedPayoff(strategy, otherPlayer).toString());
-                } catch (IndexOutOfBoundsException ioobe) {
-                    vf.setText(game.getOptimalMixedPayoff().toString());
-                }
+            VectorField vf = createVectorField(true);
+            int stratIndex = i - 2;
+            Player otherPlayer = player == game.getPlayer1() ? game.getPlayer2() : game.getPlayer1();
+            try {
+                String strategy = otherPlayer.getStrategies().get(stratIndex).getName();
+                vf.setText(game.getMixedPayoff(mne, strategy, otherPlayer).toString());
+            } catch (IndexOutOfBoundsException ioobe) {
+                vf.setText(game.getOptimalMixedPayoff(mne).toString());
             }
-            if (type == GUIStrategyType.Row) {
+
+            if (type == GUIStrategyType.Row)
                 grid.add(vf, i, strategyIndex);
-            } else {
+            else
                 grid.add(vf, strategyIndex, i);
-            }
         }
     }
 
@@ -489,7 +554,6 @@ public class NormalGameController implements Initializable {
         if (type == GUIStrategyType.Row) {
             Node firstPlayer = getNodeByRowColumnIndex(2, 0);
             GridPane.setRowSpan(firstPlayer, GridPane.getRowSpan(firstPlayer) - 1);
-            System.out.println("nre rowspan: " + strategyCount);
             grid.getRowConstraints().remove(grid.getRowConstraints().get(strategyCount));
             grid.getRowConstraints().get(getRowCount() - 1).setMinHeight(40);
             grid.getRowConstraints().get(getRowCount() - 1).setPrefHeight(1080);
@@ -539,7 +603,7 @@ public class NormalGameController implements Initializable {
         if (focused) {
             currentFocusedText = text;
         }
-        if (!focused) { //TODO: Todo liste abhaken -> ersten teil der Arbeit schreiben (mit UML diagrammen) -> zweiten teil anfangen
+        if (!focused) {
             if (isFirstPlayerField(currentFocusedText)) {
                 game.getPlayer1().setName(text);
             } else if (isSecondPlayerField(currentFocusedText)) {
@@ -590,7 +654,7 @@ public class NormalGameController implements Initializable {
         return column == 1;
     }
 
-    private void setListViewContent(List<NashEquilibrium> content) {
+    private void setListViewContent(List<? extends NashEquilibrium> content) {
         list.getSelectionModel().clearSelection();
         list.setItems(FXCollections.observableArrayList(content));
     }
@@ -649,28 +713,6 @@ public class NormalGameController implements Initializable {
             grid.requestFocus();
         });
         return vf;
-    }
-
-    private int getRemainingPercentHeight() {
-        int height = 100;
-        for (RowConstraints constraint : grid.getRowConstraints()) {
-            if (constraint.equals(grid.getRowConstraints().get(grid.getRowConstraints().size() - 1))) {
-                break;
-            }
-            height -= constraint.getPercentHeight();
-        }
-        return height;
-    }
-
-    private int getRemainingPercentWidth() {
-        int width = 100;
-        for (ColumnConstraints constraint : grid.getColumnConstraints()) {
-            if (constraint.equals(grid.getColumnConstraints().get(grid.getColumnConstraints().size() - 1))) {
-                break;
-            }
-            width -= constraint.getPercentWidth();
-        }
-        return width;
     }
 
     private Node getNodeByRowColumnIndex(final int row, final int column) {
